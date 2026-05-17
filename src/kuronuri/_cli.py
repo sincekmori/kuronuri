@@ -7,7 +7,9 @@ from importlib.metadata import version
 from pathlib import Path
 from typing import Annotated
 
+import click
 import typer
+from typer.core import TyperGroup
 
 from kuronuri._masker import (
     EN_MODEL,
@@ -20,7 +22,29 @@ from kuronuri._masker import (
     mask_with_label,
 )
 
-app = typer.Typer(help="Mask PII in text files.")
+
+class _DefaultMaskGroup(TyperGroup):
+    """Routes bare arguments to the default masking command.
+
+    Allows ``kuronuri <INPUT>`` and ``kuronuri serve --mcp`` to coexist:
+    unrecognised arguments are forwarded to ``main`` as if typed explicitly.
+    """
+
+    _HELP_FLAGS: frozenset[str] = frozenset({"--help", "-h"})
+
+    def parse_args(self, ctx: click.Context, args: list[str]) -> list[str]:
+        for arg in args:
+            if arg in self._HELP_FLAGS:
+                break
+            if arg.startswith("-"):
+                continue
+            if arg not in self.commands:
+                args.insert(0, "main")
+            break
+        return super().parse_args(ctx, args)
+
+
+app = typer.Typer(help="Mask PII in text files.", cls=_DefaultMaskGroup)
 
 _NEWLINE_RE = re.compile(r"\r\n|\r|\n")
 
@@ -231,3 +255,18 @@ def main(
         typer.echo(
             mask(input_, model=ner_model, mask_tags=tags, strategy=mask_strategy)
         )
+
+
+@app.command("serve")
+def serve(
+    mcp_flag: Annotated[
+        bool, typer.Option("--mcp", help="Start the MCP server for Claude integration.")
+    ] = False,
+) -> None:
+    """Start the kuronuri MCP server (stdio transport)."""
+    if not mcp_flag:
+        typer.echo("Specify a server mode with --mcp.", err=True)
+        raise typer.Exit(code=1)
+    from kuronuri._mcp import mcp as _mcp_server  # noqa: PLC0415
+
+    _mcp_server.run(transport="stdio")
